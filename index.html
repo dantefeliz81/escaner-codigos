@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Escáner de códigos</title>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Arial, sans-serif; background: #f3f4f6; color: #111; touch-action: manipulation; }
+  body { min-height: 100vh; display: flex; flex-direction: column; }
+  header { background: #1f2937; color: #fff; padding: 16px; font-size: 22px; font-weight: 700; text-align: center; }
+  main { padding: 12px; display: flex; flex-direction: column; gap: 12px; max-width: 520px; width: 100%; margin: 0 auto; }
+  .video-wrap { position: relative; width: 100%; aspect-ratio: 3 / 4; background: #000; border-radius: 12px; overflow: hidden; }
+  video { width: 100%; height: 100%; object-fit: cover; }
+  .frame { position: absolute; inset: 15% 8%; border: 3px solid #22c55e; border-radius: 10px; pointer-events: none; }
+  button { font-size: 22px; padding: 18px; border: none; border-radius: 12px; font-weight: 700; width: 100%; cursor: pointer; }
+  .btn-scan { background: #2563eb; color: #fff; }
+  .btn-stop { background: #6b7280; color: #fff; }
+  .btn-save { background: #16a34a; color: #fff; font-size: 26px; padding: 22px; }
+  .tipo { display: flex; gap: 10px; }
+  .tipo button { flex: 1; background: #e5e7eb; color: #111; }
+  .tipo button.activo { background: #7c3aed; color: #fff; }
+  label { font-size: 18px; font-weight: 700; display: block; margin-bottom: 6px; }
+  input, textarea { width: 100%; font-size: 22px; padding: 16px; border: 2px solid #9ca3af; border-radius: 12px; background: #fff; }
+  textarea { min-height: 90px; }
+  .estado { font-size: 20px; text-align: center; padding: 14px; border-radius: 12px; background: #fff; min-height: 56px; }
+  .ok { background: #dcfce7; color: #166534; }
+  .error { background: #fee2e2; color: #991b1b; }
+</style>
+</head>
+<body>
+<header>Escáner de códigos</header>
+<main>
+
+  <div class="video-wrap">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="frame"></div>
+  </div>
+  <button id="btnScan" class="btn-scan">📷 Escanear</button>
+  <button id="btnStop" class="btn-stop" style="display:none">⏹ Detener cámara</button>
+
+  <div class="tipo">
+    <button id="tipoBodega" class="activo">Bodega</button>
+    <button id="tipoMedidor">Medidor</button>
+  </div>
+
+  <div>
+    <label for="codigo">Código</label>
+    <input id="codigo" inputmode="numeric" autocomplete="off" placeholder="Escanea o escribe">
+  </div>
+
+  <div>
+    <label id="lblValor" for="valor">Cantidad</label>
+    <input id="valor" inputmode="decimal" autocomplete="off" placeholder="0">
+  </div>
+
+  <div>
+    <label for="usuario">Usuario</label>
+    <input id="usuario" autocomplete="off" placeholder="Tu nombre">
+  </div>
+
+  <div>
+    <label for="notas">Notas</label>
+    <textarea id="notas" placeholder="Opcional"></textarea>
+  </div>
+
+  <button id="btnGuardar" class="btn-save">💾 Guardar</button>
+  <div id="estado" class="estado"></div>
+</main>
+
+<script>
+  // ===== CONFIGURACIÓN =====
+  const MI_URL = "https://script.google.com/macros/s/AKfycbz_GMmdKq0EP87Naq5aPSaBWOzjUpmZN7r4EITKWfih-SvrhNtlk2ET1jE0rYF0s_9Z/exec";
+  const MI_TOKEN = "MI-TOKEN";
+  const HOJA = "Escaneos";
+
+  // ===== ELEMENTOS =====
+  const video = document.getElementById("video");
+  const btnScan = document.getElementById("btnScan");
+  const btnStop = document.getElementById("btnStop");
+  const codigoEl = document.getElementById("codigo");
+  const valorEl = document.getElementById("valor");
+  const lblValor = document.getElementById("lblValor");
+  const usuarioEl = document.getElementById("usuario");
+  const notasEl = document.getElementById("notas");
+  const estado = document.getElementById("estado");
+  const tipoBodega = document.getElementById("tipoBodega");
+  const tipoMedidor = document.getElementById("tipoMedidor");
+
+  let tipo = "Bodega";
+  let formato = "manual";
+  let stream = null;
+  let detectorTimer = null;
+  let zxingReader = null;
+
+  function mostrar(msg, clase) {
+    estado.textContent = msg;
+    estado.className = "estado " + (clase || "");
+  }
+
+  // ===== TIPO =====
+  function setTipo(t) {
+    tipo = t;
+    tipoBodega.classList.toggle("activo", t === "Bodega");
+    tipoMedidor.classList.toggle("activo", t === "Medidor");
+    lblValor.textContent = t === "Bodega" ? "Cantidad" : "Lectura";
+    valorEl.placeholder = t === "Bodega" ? "Cantidad" : "Lectura del medidor";
+  }
+  tipoBodega.onclick = () => setTipo("Bodega");
+  tipoMedidor.onclick = () => setTipo("Medidor");
+
+  // ===== CÁMARA =====
+  async function iniciarCamara() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      btnStop.style.display = "block";
+      btnScan.style.display = "none";
+      return true;
+    } catch (e) {
+      mostrar("No se pudo abrir la cámara: " + e.message + ". Revisa que la página esté en HTTPS y que des permiso.", "error");
+      return false;
+    }
+  }
+
+  function detenerCamara() {
+    if (detectorTimer) { clearInterval(detectorTimer); detectorTimer = null; }
+    if (zxingReader) { try { zxingReader.reset(); } catch (e) {} zxingReader = null; }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    video.srcObject = null;
+    btnStop.style.display = "none";
+    btnScan.style.display = "block";
+  }
+
+  function codigoDetectado(texto, fmt) {
+    codigoEl.value = texto;
+    formato = fmt;
+    mostrar("Leído (" + fmt + "): " + texto, "ok");
+    if (navigator.vibrate) navigator.vibrate(150);
+    detenerCamara();
+    valorEl.focus();
+  }
+
+  // Formatos soportados: EAN-13 y Code 128
+  async function escanear() {
+    const ok = await iniciarCamara();
+    if (!ok) return;
+
+    if ("BarcodeDetector" in window) {
+      // Android / Chrome: detector nativo
+      try {
+        const detector = new BarcodeDetector({ formats: ["ean_13", "code_128"] });
+        detectorTimer = setInterval(async () => {
+          if (video.readyState < 2) return;
+          try {
+            const codes = await detector.detect(video);
+            if (codes.length > 0) {
+              const c = codes[0];
+              codigoDetectado(c.rawValue, c.format === "ean_13" ? "EAN-13" : "Code 128");
+            }
+          } catch (e) {}
+        }, 250);
+        mostrar("Apunta al código de barras.");
+        return;
+      } catch (e) { /* cae a ZXing */ }
+    }
+
+    // iPhone / otros: ZXing
+    if (typeof ZXing === "undefined") {
+      mostrar("No se cargó la librería de lectura. Revisa tu conexión y vuelve a intentar.", "error");
+      return;
+    }
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.CODE_128]);
+    zxingReader = new ZXing.BrowserMultiFormatReader(hints);
+    zxingReader.decodeFromVideoElement(video, (result, err) => {
+      if (result) {
+        const fmt = result.getBarcodeFormat() === ZXing.BarcodeFormat.EAN_13 ? "EAN-13" : "Code 128";
+        codigoDetectado(result.getText(), fmt);
+      }
+    });
+    mostrar("Apunta al código de barras.");
+  }
+
+  btnScan.onclick = escanear;
+  btnStop.onclick = () => { detenerCamara(); mostrar(""); };
+
+  // ===== GUARDAR =====
+  async function guardar() {
+    const codigo = codigoEl.value.trim();
+    const valor = valorEl.value.trim();
+    if (!codigo) { mostrar("Falta el código.", "error"); return; }
+    if (!valor) { mostrar(tipo === "Bodega" ? "Falta la cantidad." : "Falta la lectura.", "error"); return; }
+
+    const datos = {
+      token: MI_TOKEN,
+      hoja: HOJA,
+      fecha: new Date().toISOString(),
+      tipo: tipo,
+      código: codigo,
+      formato: formato,
+      cantidad: valor,
+      usuario: usuarioEl.value.trim(),
+      notas: notasEl.value.trim()
+    };
+
+    mostrar("Guardando...");
+    btnGuardar.disabled = true;
+    try {
+      // text/plain evita el preflight CORS que Apps Script no admite
+      const r = await fetch(MI_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(datos)
+      });
+      const json = await r.json();
+      if (json.ok) {
+        mostrar("Guardado ✔", "ok");
+        codigoEl.value = "";
+        valorEl.value = "";
+        notasEl.value = "";
+        formato = "manual";
+      } else {
+        mostrar("Error: " + (json.error || "desconocido"), "error");
+      }
+    } catch (e) {
+      mostrar("No se pudo enviar: " + e.message, "error");
+    } finally {
+      btnGuardar.disabled = false;
+    }
+  }
+  const btnGuardar = document.getElementById("btnGuardar");
+  btnGuardar.onclick = guardar;
+
+  setTipo("Bodega");
+</script>
+</body>
+</html>
