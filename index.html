@@ -40,6 +40,8 @@
   </div>
   <button id="btnScan" class="btn-scan">📷 Escanear</button>
   <button id="btnStop" class="btn-stop" style="display:none">⏹ Detener cámara</button>
+  <button id="btnFoto" class="btn-scan" style="background:#0f766e">📸 Tomar foto del código</button>
+  <input id="fotoInput" type="file" accept="image/*" capture="environment" style="display:none">
 
   <div class="tipo">
     <button id="tipoBodega" class="activo">Bodega</button>
@@ -173,20 +175,51 @@
 
     // iPhone / otros: ZXing
     if (typeof ZXing === "undefined") {
-      mostrar("No se cargó la librería de lectura. Revisa tu conexión y vuelve a intentar.", "error");
+      mostrar("No se cargó la librería de lectura. Usa 📸 Tomar foto del código o escribe el código a mano.", "error");
       return;
     }
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.CODE_128]);
-    zxingReader = new ZXing.BrowserMultiFormatReader(hints);
-    zxingReader.decodeFromVideoElement(video, (result, err) => {
-      if (result) {
-        const fmt = result.getBarcodeFormat() === ZXing.BarcodeFormat.EAN_13 ? "EAN-13" : "Code 128";
-        codigoDetectado(result.getText(), fmt);
-      }
-    });
-    mostrar("Apunta al código de barras.");
+    try {
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.CODE_128]);
+      zxingReader = new ZXing.BrowserMultiFormatReader(hints);
+      zxingReader.decodeFromVideoElement(video, (result, err) => {
+        if (result) {
+          const fmt = result.getBarcodeFormat() === ZXing.BarcodeFormat.EAN_13 ? "EAN-13" : "Code 128";
+          codigoDetectado(result.getText(), fmt);
+        }
+      });
+      mostrar("Apunta al código de barras. Si no lee, usa 📸 Tomar foto del código.");
+    } catch (e) {
+      mostrar("Error al iniciar el lector: " + e.message + ". Usa 📸 Tomar foto del código.", "error");
+    }
   }
+
+  // Alternativa segura en iPhone: tomar una foto del código y leerla
+  const fotoInput = document.getElementById("fotoInput");
+  document.getElementById("btnFoto").onclick = () => fotoInput.click();
+  fotoInput.onchange = async () => {
+    const file = fotoInput.files && fotoInput.files[0];
+    if (!file) return;
+    if (typeof ZXing === "undefined") {
+      mostrar("No se cargó la librería de lectura. Escribe el código a mano.", "error");
+      return;
+    }
+    mostrar("Leyendo la foto...");
+    const url = URL.createObjectURL(file);
+    try {
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.CODE_128]);
+      const reader = new ZXing.BrowserMultiFormatReader(hints);
+      const result = await reader.decodeFromImageUrl(url);
+      const fmt = result.getBarcodeFormat() === ZXing.BarcodeFormat.EAN_13 ? "EAN-13" : "Code 128";
+      codigoDetectado(result.getText(), fmt);
+    } catch (e) {
+      mostrar("No pude leer la foto. Acércate, enfoca bien y vuelve a intentar, o escribe el código a mano.", "error");
+    } finally {
+      URL.revokeObjectURL(url);
+      fotoInput.value = "";
+    }
+  };
 
   btnScan.onclick = escanear;
   btnStop.onclick = () => { detenerCamara(); mostrar(""); };
